@@ -1,0 +1,55 @@
+{
+  "name": "livescore-case",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "nx run-many -t serve -p api web",
+    "build": "nx run-many -t build -p api web"
+  },
+  "engines": {
+    "node": "^22.22.3 || >=24.15.0"
+  },
+  "dependencies": {
+    "@angular/common": "~22.2.0",
+    "@angular/compiler": "~22.2.0",
+    "@angular/core": "~22.2.0",
+    "@angular/forms": "~22.2.0",
+    "@angular/platform-browser": "~22.2.0",
+    "@angular/router": "~22.2.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/platform-express": "^11.0.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "~7.8.0",
+    "swagger-ui-express": "^5.0.1",
+    "zone.js": "~0.16.2"
+  },
+  "devDependencies": {
+    "@angular-devkit/core": "~22.2.0",
+    "@angular-devkit/schematics": "~22.2.0",
+    "@angular/build": "~22.2.0",
+    "@angular/cli": "~22.2.0",
+    "@angular/compiler-cli": "~22.2.0",
+    "@angular/language-service": "~22.2.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@nx/angular": "^24.0.6",
+    "@nx/js": "^24.0.6",
+    "@nx/nest": "^24.0.6",
+    "@nx/node": "24.0.6",
+    "@nx/web": "24.0.6",
+    "@nx/webpack": "24.0.6",
+    "@nx/workspace": "^24.0.6",
+    "@schematics/angular": "~22.2.0",
+    "@swc/helpers": "~0.5.18",
+    "@types/node": "^24.19.2",
+    "@types/swagger-ui-express": "^4.1.8",
+    "nx": "^24.0.6",
+    "prettier": "~3.6.2",
+    "tslib": "^2.3.0",
+    "typescript": "~6.0.3",
+    "webpack": "~5.110.0",
+    "webpack-cli": "^7.0.0",
+    "webpack-dev-server": "^5.2.1"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+tmp
+out-tsc
+.nx/cache
+.nx/workspace-data
+.angular
+.DS_Store
+*.log

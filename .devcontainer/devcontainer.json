@@ -1,0 +1,10 @@
+{
+  "name": "Livescore",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "postCreateCommand": "npm install",
+  "forwardPorts": [4200, 3000],
+  "portsAttributes": {
+    "4200": { "label": "Frontend", "onAutoForward": "openBrowser" },
+    "3000": { "label": "API", "onAutoForward": "silent" }
+  }
+}

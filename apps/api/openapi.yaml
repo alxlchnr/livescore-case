@@ -1,0 +1,1445 @@
+openapi: 3.0.3
+info:
+  title: Livescore API
+  version: 2.0.0
+  description: |
+    API für Wettbewerbsverwaltung und Livescoring. Alle Daten liegen im Speicher und werden bei jedem
+    Neustart der API auf den Ausgangsbestand zurückgesetzt.
+
+    ## Versionen
+    - **v2** (aktuell): Lesen ohne Anmeldung, Schreiben nur mit Bearer-Token und passender Berechtigung.
+    - **v1** (veraltet): identische Fachlichkeit ohne Authentifizierung. Mitgesendete Tokens werden ignoriert.
+
+    Beide Versionen arbeiten auf demselben Datenbestand.
+
+    ## Anmeldung
+    Token über `POST /api/v2/auth/login` holen und in der Swagger UI unter **Authorize** eintragen.
+    Gültigkeit: 8 Stunden.
+
+    | Benutzer | Rolle | Berechtigung |
+    |---|---|---|
+    | `admin` | `SYSTEM_ADMIN` | alles |
+    | `handball-admin` | `LEAGUE_ADMIN` | Handball-Regionalliga Süd |
+    | `volleyball-admin` | `LEAGUE_ADMIN` | Volleyball-Stadtturnier |
+    | `schreiber-handball` | `SCORER` | zugewiesene Handballspiele |
+    | `schreiber-volleyball` | `SCORER` | zugewiesene Volleyballspiele |
+
+    Passwort für alle Benutzer: `livescore`
+
+    ## Rollen
+    - `SYSTEM_ADMIN` darf alles.
+    - `LEAGUE_ADMIN` verwaltet die Wettbewerbe, denen er als Admin zugewiesen ist, sowie deren Teams und Spiele.
+    - `SCORER` erfasst Ereignisse in Spielen, denen er als Schreiber zugewiesen ist.
+
+    Berechtigungen werden bei jeder Anfrage gegen den aktuellen Datenbestand geprüft; geänderte Zuweisungen
+    wirken sofort.
+
+    ## Fehler
+    Fehler haben das Format `{ "statusCode": 400, "message": "…", "error": "Bad Request" }`.
+security: []
+servers:
+  - url: /api
+tags:
+  - name: Auth
+    description: Anmeldung (nur v2)
+  - name: Wettbewerbe
+    description: Ligen und Turniere
+  - name: Teams
+    description: Teams und Benutzer
+  - name: Spiele
+    description: Spielplan und Schreiber
+  - name: Live
+    description: Ereignisse, Spielstand und Echtzeit-Aktualisierungen
+  - name: Wettbewerbe (v1)
+    description: Veraltet – siehe Wettbewerbe
+  - name: Teams (v1)
+    description: Veraltet – siehe Teams
+  - name: Spiele (v1)
+    description: Veraltet – siehe Spiele
+  - name: Live (v1)
+    description: Veraltet – siehe Live
+
+paths:
+  # ───────────────────────────── v2 ─────────────────────────────
+  /v2/auth/login:
+    post:
+      tags: [Auth]
+      summary: Anmelden
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { username: handball-admin, password: livescore }
+      responses:
+        '200':
+          description: Angemeldet
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v2/auth/me:
+    get:
+      tags: [Auth]
+      summary: Aktueller Benutzer
+      operationId: getMe
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Daten des angemeldeten Benutzers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v2/leagues:
+    get:
+      tags: [Wettbewerbe]
+      summary: Ligen auflisten
+      operationId: listLeagues
+      responses:
+        '200': { $ref: '#/components/responses/LeagueList' }
+    post:
+      tags: [Wettbewerbe]
+      summary: Liga anlegen
+      description: 'Berechtigt: `SYSTEM_ADMIN`.'
+      operationId: createLeague
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/LeagueInput' }
+      responses:
+        '201': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v2/leagues/{id}:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    get:
+      tags: [Wettbewerbe]
+      summary: Liga abrufen
+      operationId: getLeague
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Wettbewerbe]
+      summary: Liga ändern
+      description: 'Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieser Liga.'
+      operationId: updateLeague
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/LeagueInput' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Wettbewerbe]
+      summary: Liga löschen
+      description: |
+        Löscht die Liga samt ihrer Spiele. Teams bleiben erhalten.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieser Liga.
+      operationId: deleteLeague
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Gelöscht }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/leagues/{id}/teams:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe]
+      summary: Teams der Liga setzen
+      description: |
+        Ersetzt die Liste der zugeordneten Teams vollständig. Bei unbekannten Team-IDs bleibt die Zuordnung unverändert.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieser Liga.
+      operationId: setLeagueTeams
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TeamIds' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/leagues/{id}/admins:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe]
+      summary: Admins der Liga setzen
+      description: |
+        Ersetzt die Liste der zuständigen Benutzer vollständig.
+
+        Berechtigt: `SYSTEM_ADMIN`.
+      operationId: setLeagueAdmins
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/AdminIds' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/tournaments:
+    get:
+      tags: [Wettbewerbe]
+      summary: Turniere auflisten
+      operationId: listTournaments
+      responses:
+        '200': { $ref: '#/components/responses/TournamentList' }
+    post:
+      tags: [Wettbewerbe]
+      summary: Turnier anlegen
+      description: 'Berechtigt: `SYSTEM_ADMIN`.'
+      operationId: createTournament
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TournamentInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v2/tournaments/{id}:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    get:
+      tags: [Wettbewerbe]
+      summary: Turnier abrufen
+      operationId: getTournament
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Wettbewerbe]
+      summary: Turnier ändern
+      description: 'Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieses Turniers.'
+      operationId: updateTournament
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TournamentInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Wettbewerbe]
+      summary: Turnier löschen
+      description: |
+        Löscht das Turnier samt seiner Spiele. Teams bleiben erhalten.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieses Turniers.
+      operationId: deleteTournament
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Gelöscht }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/tournaments/{id}/teams:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe]
+      summary: Teams des Turniers setzen
+      description: |
+        Ersetzt die Liste der zugeordneten Teams vollständig. Bei unbekannten Team-IDs bleibt die Zuordnung unverändert.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` dieses Turniers.
+      operationId: setTournamentTeams
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TeamIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/tournaments/{id}/admins:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe]
+      summary: Admins des Turniers setzen
+      description: |
+        Ersetzt die Liste der zuständigen Benutzer vollständig.
+
+        Berechtigt: `SYSTEM_ADMIN`.
+      operationId: setTournamentAdmins
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/AdminIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/teams:
+    get:
+      tags: [Teams]
+      summary: Teams auflisten
+      operationId: listTeams
+      responses:
+        '200': { $ref: '#/components/responses/TeamList' }
+    post:
+      tags: [Teams]
+      summary: Team anlegen
+      description: 'Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN`.'
+      operationId: createTeam
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TeamInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Team' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v2/teams/{id}:
+    parameters: [{ $ref: '#/components/parameters/TeamId' }]
+    get:
+      tags: [Teams]
+      summary: Team abrufen
+      operationId: getTeam
+      responses:
+        '200': { $ref: '#/components/responses/Team' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Teams]
+      summary: Team ändern
+      description: 'Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` eines Wettbewerbs, dem das Team angehört.'
+      operationId: updateTeam
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/TeamInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Team' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Teams]
+      summary: Team löschen
+      description: |
+        Entfernt das Team auch aus allen Wettbewerben. Teams mit angesetzten Spielen können nicht gelöscht werden.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` eines Wettbewerbs, dem das Team angehört.
+      operationId: deleteTeam
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Gelöscht }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v2/users:
+    get:
+      tags: [Teams]
+      summary: Benutzer auflisten
+      description: |
+        Zur Auswahl von Admins und Schreibern.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN`.
+      operationId: listUsers
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/UserList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v2/matches:
+    get:
+      tags: [Spiele]
+      summary: Spiele auflisten
+      description: Sortiert nach Anstoßzeit.
+      operationId: listMatches
+      parameters:
+        - $ref: '#/components/parameters/CompetitionFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+      responses:
+        '200': { $ref: '#/components/responses/MatchList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Spiele]
+      summary: Spiel ansetzen
+      description: |
+        Legt ein Spiel mit Status `SCHEDULED` und Stand 0:0 an. Beide Teams müssen dem Wettbewerb zugeordnet und verschieden sein.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` des Wettbewerbs.
+      operationId: createMatch
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/MatchInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v2/matches/{id}:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Spiele]
+      summary: Spiel abrufen
+      description: Spiel mit Teams, Status, laufendem Abschnitt und Spielstand.
+      operationId: getMatch
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Spiele]
+      summary: Spiel ändern
+      description: |
+        Ändert Teams, Anstoßzeit und Spielort. Der Wettbewerb kann nicht geändert werden. Teams können nur geändert
+        werden, solange noch keine Ereignisse erfasst sind.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` des Wettbewerbs.
+      operationId: updateMatch
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/MatchUpdateInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Spiele]
+      summary: Spiel löschen
+      description: |
+        Löscht das Spiel samt Ereignissen und beendet offene Streams.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` des Wettbewerbs.
+      operationId: deleteMatch
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Gelöscht }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/matches/{id}/scorers:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    put:
+      tags: [Spiele]
+      summary: Schreiber des Spiels setzen
+      description: |
+        Ersetzt die Liste der Schreiber vollständig. Nur diese Benutzer (mit Rolle `SCORER`) dürfen in v2 Ereignisse erfassen.
+
+        Berechtigt: `SYSTEM_ADMIN` oder `LEAGUE_ADMIN` des Wettbewerbs.
+      operationId: setMatchScorers
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/ScorerIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/matches/{id}/events:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Live]
+      summary: Ereignisse auflisten
+      description: Alle Ereignisse des Spiels in `seq`-Reihenfolge, inklusive korrigierter Ereignisse.
+      operationId: listMatchEvents
+      parameters: [{ $ref: '#/components/parameters/AfterSeq' }]
+      responses:
+        '200': { $ref: '#/components/responses/EventList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Live]
+      summary: Ereignis erfassen
+      description: |
+        Erfasst ein Spielereignis und liefert es zusammen mit dem neuen Spielstand. Siehe Schema `EventInput` für die
+        Ereignistypen und ihre Bedingungen.
+
+        Wird eine bereits verwendete `clientEventId` erneut gesendet, antwortet die API mit `200` und dem bereits
+        gespeicherten Ereignis, ohne ein neues anzulegen.
+
+        Berechtigt: `SCORER`, der dem Spiel zugewiesen ist, `LEAGUE_ADMIN` des Wettbewerbs oder `SYSTEM_ADMIN`.
+        `createdBy` ist der Benutzername.
+      operationId: createMatchEvent
+      security: [{ bearerAuth: [] }]
+      requestBody: { $ref: '#/components/requestBodies/EventInput' }
+      responses:
+        '201': { $ref: '#/components/responses/MatchUpdate' }
+        '200': { $ref: '#/components/responses/MatchUpdateDuplicate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/EventConflict' }
+
+  /v2/matches/{id}/stream:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Live]
+      summary: Echtzeit-Stream (Server-Sent Events)
+      description: |
+        Öffnet einen dauerhaften Server-Sent-Events-Stream. Für jedes neue Ereignis wird eine Nachricht gesendet:
+
+        ```
+        id: 47
+        event: match-event
+        data: {"event":{…},"score":{…},"status":"LIVE","currentPeriod":2}
+        ```
+
+        - `id` ist die `seq` des Ereignisses.
+        - `data` hat das Schema `MatchUpdate`; der Spielstand entspricht dem Stand nach diesem Ereignis.
+        - Etwa alle 15 Sekunden sendet der Server die Kommentarzeile `: heartbeat`.
+        - Zu Beginn sendet der Server `retry: 3000` (Wiederverbindung nach 3 Sekunden).
+
+        **Wiederaufnahme:** Mit dem Header `Last-Event-ID` (setzt `EventSource` beim automatischen Wiederverbinden
+        selbst) oder dem Query-Parameter `lastEventId` liefert der Server zuerst alle Ereignisse mit größerer `seq`
+        nach und setzt danach live fort. Ohne Angabe werden zuerst alle bisherigen Ereignisse gesendet.
+
+        Werden Streams unterwegs gepuffert, liefert `GET /v2/matches/{id}/updates` dieselben Nachrichten per Long-Poll.
+      operationId: streamMatch
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Zuletzt empfangene `seq`.
+          schema: { type: integer, minimum: 0 }
+        - name: lastEventId
+          in: query
+          required: false
+          description: Alternative zum Header, z. B. für den ersten Verbindungsaufbau mit `EventSource`.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Ereignis-Stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Folge von Nachrichten im SSE-Format; `data` entspricht `MatchUpdate`.
+              example: |
+                id: 47
+                event: match-event
+                data: {"event":{"id":"match-3-e47","matchId":"match-3","seq":47,"type":"SCORE","team":"HOME","points":1,"createdAt":"2026-05-17T18:42:10.000Z","createdBy":"simulator"},"score":{"home":20,"away":18,"periods":[{"period":1,"home":13,"away":11,"winner":"HOME"},{"period":2,"home":7,"away":7,"winner":null}]},"status":"LIVE","currentPeriod":2}
+
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v2/matches/{id}/updates:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Live]
+      summary: Echtzeit-Aktualisierungen (Long-Poll)
+      description: |
+        Alternative zum Stream für Umgebungen, in denen Streaming-Antworten unterwegs gepuffert werden. Jede Antwort ist
+        eine abgeschlossene JSON-Antwort; der Client fragt in einer Schleife erneut ab.
+
+        - Gibt es Ereignisse mit `seq` größer `afterSeq`, antwortet die API sofort mit allen davon.
+        - Sonst hält die API die Anfrage, bis ein neues Ereignis erfasst wird (sofortige Antwort) oder `wait`
+          Sekunden vergangen sind (Antwort mit leerer Liste `updates`).
+        - Ist das Spiel `FINISHED` und gibt es keine neueren Ereignisse, antwortet die API sofort mit leerer Liste.
+          Der Client kann das Abfragen dann beenden.
+
+        Die Elemente von `updates` entsprechen genau den `data` der Stream-Nachrichten (`MatchUpdate`). Für die nächste
+        Abfrage wird `lastSeq` als `afterSeq` übernommen. Antworten werden nicht zwischengespeichert
+        (`Cache-Control: no-store`).
+      operationId: pollMatchUpdates
+      parameters:
+        - $ref: '#/components/parameters/AfterSeq'
+        - name: wait
+          in: query
+          required: false
+          description: Maximale Wartezeit in Sekunden. Werte über 25 werden auf 25 begrenzt; `0` antwortet sofort.
+          schema: { type: integer, minimum: 0, maximum: 25, default: 20 }
+      responses:
+        '200':
+          description: Neue Aktualisierungen oder leere Liste nach Ablauf der Wartezeit
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MatchUpdates' }
+              example:
+                updates:
+                  - event:
+                      id: match-3-e47
+                      matchId: match-3
+                      seq: 47
+                      type: SCORE
+                      team: HOME
+                      points: 1
+                      createdAt: '2026-05-17T18:42:10.000Z'
+                      createdBy: simulator
+                    score:
+                      home: 20
+                      away: 18
+                      periods:
+                        - { period: 1, home: 13, away: 11, winner: HOME }
+                        - { period: 2, home: 7, away: 7, winner: null }
+                    status: LIVE
+                    currentPeriod: 2
+                lastSeq: 47
+                status: LIVE
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: Spiel nicht gefunden oder während des Wartens gelöscht
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ───────────────────────────── v1 (veraltet) ─────────────────────────────
+  /v1/leagues:
+    get:
+      tags: [Wettbewerbe (v1)]
+      summary: Ligen auflisten
+      description: 'Veraltet, nutze `GET /v2/leagues`.'
+      deprecated: true
+      operationId: listLeaguesV1
+      responses:
+        '200': { $ref: '#/components/responses/LeagueList' }
+    post:
+      tags: [Wettbewerbe (v1)]
+      summary: Liga anlegen
+      description: 'Veraltet, nutze `POST /v2/leagues`.'
+      deprecated: true
+      operationId: createLeagueV1
+      requestBody: { $ref: '#/components/requestBodies/LeagueInput' }
+      responses:
+        '201': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /v1/leagues/{id}:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    get:
+      tags: [Wettbewerbe (v1)]
+      summary: Liga abrufen
+      description: 'Veraltet, nutze `GET /v2/leagues/{id}`.'
+      deprecated: true
+      operationId: getLeagueV1
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Liga ändern
+      description: 'Veraltet, nutze `PUT /v2/leagues/{id}`.'
+      deprecated: true
+      operationId: updateLeagueV1
+      requestBody: { $ref: '#/components/requestBodies/LeagueInput' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Wettbewerbe (v1)]
+      summary: Liga löschen
+      description: 'Veraltet, nutze `DELETE /v2/leagues/{id}`. Löscht auch die Spiele der Liga.'
+      deprecated: true
+      operationId: deleteLeagueV1
+      responses:
+        '204': { description: Gelöscht }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/leagues/{id}/teams:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Teams der Liga setzen
+      description: 'Veraltet, nutze `PUT /v2/leagues/{id}/teams`.'
+      deprecated: true
+      operationId: setLeagueTeamsV1
+      requestBody: { $ref: '#/components/requestBodies/TeamIds' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/leagues/{id}/admins:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Admins der Liga setzen
+      description: 'Veraltet, nutze `PUT /v2/leagues/{id}/admins`.'
+      deprecated: true
+      operationId: setLeagueAdminsV1
+      requestBody: { $ref: '#/components/requestBodies/AdminIds' }
+      responses:
+        '200': { $ref: '#/components/responses/League' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/tournaments:
+    get:
+      tags: [Wettbewerbe (v1)]
+      summary: Turniere auflisten
+      description: 'Veraltet, nutze `GET /v2/tournaments`.'
+      deprecated: true
+      operationId: listTournamentsV1
+      responses:
+        '200': { $ref: '#/components/responses/TournamentList' }
+    post:
+      tags: [Wettbewerbe (v1)]
+      summary: Turnier anlegen
+      description: 'Veraltet, nutze `POST /v2/tournaments`.'
+      deprecated: true
+      operationId: createTournamentV1
+      requestBody: { $ref: '#/components/requestBodies/TournamentInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /v1/tournaments/{id}:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    get:
+      tags: [Wettbewerbe (v1)]
+      summary: Turnier abrufen
+      description: 'Veraltet, nutze `GET /v2/tournaments/{id}`.'
+      deprecated: true
+      operationId: getTournamentV1
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Turnier ändern
+      description: 'Veraltet, nutze `PUT /v2/tournaments/{id}`.'
+      deprecated: true
+      operationId: updateTournamentV1
+      requestBody: { $ref: '#/components/requestBodies/TournamentInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Wettbewerbe (v1)]
+      summary: Turnier löschen
+      description: 'Veraltet, nutze `DELETE /v2/tournaments/{id}`. Löscht auch die Spiele des Turniers.'
+      deprecated: true
+      operationId: deleteTournamentV1
+      responses:
+        '204': { description: Gelöscht }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/tournaments/{id}/teams:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Teams des Turniers setzen
+      description: 'Veraltet, nutze `PUT /v2/tournaments/{id}/teams`.'
+      deprecated: true
+      operationId: setTournamentTeamsV1
+      requestBody: { $ref: '#/components/requestBodies/TeamIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/tournaments/{id}/admins:
+    parameters: [{ $ref: '#/components/parameters/CompetitionId' }]
+    put:
+      tags: [Wettbewerbe (v1)]
+      summary: Admins des Turniers setzen
+      description: 'Veraltet, nutze `PUT /v2/tournaments/{id}/admins`.'
+      deprecated: true
+      operationId: setTournamentAdminsV1
+      requestBody: { $ref: '#/components/requestBodies/AdminIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Tournament' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/teams:
+    get:
+      tags: [Teams (v1)]
+      summary: Teams auflisten
+      description: 'Veraltet, nutze `GET /v2/teams`.'
+      deprecated: true
+      operationId: listTeamsV1
+      responses:
+        '200': { $ref: '#/components/responses/TeamList' }
+    post:
+      tags: [Teams (v1)]
+      summary: Team anlegen
+      description: 'Veraltet, nutze `POST /v2/teams`.'
+      deprecated: true
+      operationId: createTeamV1
+      requestBody: { $ref: '#/components/requestBodies/TeamInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Team' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /v1/teams/{id}:
+    parameters: [{ $ref: '#/components/parameters/TeamId' }]
+    get:
+      tags: [Teams (v1)]
+      summary: Team abrufen
+      description: 'Veraltet, nutze `GET /v2/teams/{id}`.'
+      deprecated: true
+      operationId: getTeamV1
+      responses:
+        '200': { $ref: '#/components/responses/Team' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Teams (v1)]
+      summary: Team ändern
+      description: 'Veraltet, nutze `PUT /v2/teams/{id}`.'
+      deprecated: true
+      operationId: updateTeamV1
+      requestBody: { $ref: '#/components/requestBodies/TeamInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Team' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Teams (v1)]
+      summary: Team löschen
+      description: 'Veraltet, nutze `DELETE /v2/teams/{id}`.'
+      deprecated: true
+      operationId: deleteTeamV1
+      responses:
+        '204': { description: Gelöscht }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/users:
+    get:
+      tags: [Teams (v1)]
+      summary: Benutzer auflisten
+      description: 'Veraltet, nutze `GET /v2/users`.'
+      deprecated: true
+      operationId: listUsersV1
+      responses:
+        '200': { $ref: '#/components/responses/UserList' }
+
+  /v1/matches:
+    get:
+      tags: [Spiele (v1)]
+      summary: Spiele auflisten
+      description: 'Veraltet, nutze `GET /v2/matches`.'
+      deprecated: true
+      operationId: listMatchesV1
+      parameters:
+        - $ref: '#/components/parameters/CompetitionFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+      responses:
+        '200': { $ref: '#/components/responses/MatchList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Spiele (v1)]
+      summary: Spiel ansetzen
+      description: 'Veraltet, nutze `POST /v2/matches`.'
+      deprecated: true
+      operationId: createMatchV1
+      requestBody: { $ref: '#/components/requestBodies/MatchInput' }
+      responses:
+        '201': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /v1/matches/{id}:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Spiele (v1)]
+      summary: Spiel abrufen
+      description: 'Veraltet, nutze `GET /v2/matches/{id}`.'
+      deprecated: true
+      operationId: getMatchV1
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Spiele (v1)]
+      summary: Spiel ändern
+      description: 'Veraltet, nutze `PUT /v2/matches/{id}`.'
+      deprecated: true
+      operationId: updateMatchV1
+      requestBody: { $ref: '#/components/requestBodies/MatchUpdateInput' }
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Spiele (v1)]
+      summary: Spiel löschen
+      description: 'Veraltet, nutze `DELETE /v2/matches/{id}`.'
+      deprecated: true
+      operationId: deleteMatchV1
+      responses:
+        '204': { description: Gelöscht }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/matches/{id}/scorers:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    put:
+      tags: [Spiele (v1)]
+      summary: Schreiber des Spiels setzen
+      description: 'Veraltet, nutze `PUT /v2/matches/{id}/scorers`.'
+      deprecated: true
+      operationId: setMatchScorersV1
+      requestBody: { $ref: '#/components/requestBodies/ScorerIds' }
+      responses:
+        '200': { $ref: '#/components/responses/Match' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/matches/{id}/events:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Live (v1)]
+      summary: Ereignisse auflisten
+      description: 'Veraltet, nutze `GET /v2/matches/{id}/events`.'
+      deprecated: true
+      operationId: listMatchEventsV1
+      parameters: [{ $ref: '#/components/parameters/AfterSeq' }]
+      responses:
+        '200': { $ref: '#/components/responses/EventList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Live (v1)]
+      summary: Ereignis erfassen
+      description: 'Veraltet, nutze `POST /v2/matches/{id}/events`. `createdBy` ist hier immer `anonymous`.'
+      deprecated: true
+      operationId: createMatchEventV1
+      requestBody: { $ref: '#/components/requestBodies/EventInput' }
+      responses:
+        '201': { $ref: '#/components/responses/MatchUpdate' }
+        '200': { $ref: '#/components/responses/MatchUpdateDuplicate' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/EventConflict' }
+
+  /v1/matches/{id}/stream:
+    parameters: [{ $ref: '#/components/parameters/MatchId' }]
+    get:
+      tags: [Live (v1)]
+      summary: Echtzeit-Stream (Server-Sent Events)
+      description: 'Veraltet, nutze `GET /v2/matches/{id}/stream`. Gleiches Nachrichtenformat und Wiederaufnahmeverhalten.'
+      deprecated: true
+      operationId: streamMatchV1
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Zuletzt empfangene `seq`.
+          schema: { type: integer, minimum: 0 }
+        - name: lastEventId
+          in: query
+          required: false
+          description: Alternative zum Header.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Ereignis-Stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token aus `POST /v2/auth/login`.
+
+  parameters:
+    CompetitionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: league-1
+    TeamId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: team-1
+    MatchId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: match-3
+    CompetitionFilter:
+      name: competitionId
+      in: query
+      required: false
+      description: Nur Spiele dieses Wettbewerbs (Liga oder Turnier).
+      schema: { type: string }
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      description: Nur Spiele mit diesem Status.
+      schema: { $ref: '#/components/schemas/MatchStatus' }
+    AfterSeq:
+      name: afterSeq
+      in: query
+      required: false
+      description: Nur Ereignisse mit `seq` größer diesem Wert.
+      schema: { type: integer, minimum: 0 }
+
+  requestBodies:
+    LeagueInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LeagueInput' }
+    TournamentInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TournamentInput' }
+    TeamInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TeamInput' }
+    TeamIds:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [teamIds]
+            properties:
+              teamIds: { type: array, items: { type: string }, example: [team-1, team-2] }
+    AdminIds:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [adminIds]
+            properties:
+              adminIds: { type: array, items: { type: string }, example: [user-2] }
+    ScorerIds:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [scorerIds]
+            properties:
+              scorerIds: { type: array, items: { type: string }, example: [user-4] }
+    MatchInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MatchInput' }
+    MatchUpdateInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MatchUpdateInput' }
+    EventInput:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/EventInput' }
+          examples:
+            score:
+              summary: Punkt/Tor für das Heimteam
+              value: { type: SCORE, team: HOME, clientEventId: 7f9c2b1e-0001 }
+            threePoints:
+              summary: Drei Punkte (nur kumulative Wertung)
+              value: { type: SCORE, team: AWAY, points: 3 }
+            periodStarted:
+              summary: Abschnitt beginnen
+              value: { type: PERIOD_STARTED }
+            correction:
+              summary: Ereignis zurücknehmen
+              value: { type: CORRECTION, revertsEventId: match-3-e47 }
+            note:
+              summary: Notiz
+              value: { type: NOTE, text: Verletzungsunterbrechung }
+
+  responses:
+    League:
+      description: Liga
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/League' }
+    LeagueList:
+      description: Ligen
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/League' } }
+    Tournament:
+      description: Turnier
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Tournament' }
+    TournamentList:
+      description: Turniere
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/Tournament' } }
+    Team:
+      description: Team
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Team' }
+    TeamList:
+      description: Teams
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/Team' } }
+    UserList:
+      description: Benutzer
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/User' } }
+    Match:
+      description: Spiel
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Match' }
+    MatchList:
+      description: Spiele
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/Match' } }
+    EventList:
+      description: Ereignisse
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/MatchEvent' } }
+    MatchUpdate:
+      description: Ereignis gespeichert
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MatchUpdate' }
+    MatchUpdateDuplicate:
+      description: '`clientEventId` war bereits bekannt; das gespeicherte Ereignis wird zurückgegeben.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/MatchUpdate' }
+    BadRequest:
+      description: Ungültige Eingabe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { statusCode: 400, message: 'Feld "name" ist erforderlich.', error: Bad Request }
+    Unauthorized:
+      description: Nicht angemeldet, Token ungültig oder Anmeldedaten falsch
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { statusCode: 401, message: Bearer-Token fehlt., error: Unauthorized }
+    Forbidden:
+      description: Keine Berechtigung für diese Ressource
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { statusCode: 403, message: Keine Berechtigung für diesen Wettbewerb., error: Forbidden }
+    NotFound:
+      description: Ressource existiert nicht
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { statusCode: 404, message: 'Spiel "match-99" wurde nicht gefunden.', error: Not Found }
+    Conflict:
+      description: Aktion im aktuellen Zustand nicht möglich
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    EventConflict:
+      description: Ereignis passt nicht zum Spielzustand (siehe `EventInput`) oder Korrektur ist ungültig
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { statusCode: 409, message: Es läuft kein Abschnitt., error: Conflict }
+
+  schemas:
+    Error:
+      type: object
+      required: [statusCode, message]
+      properties:
+        statusCode: { type: integer, example: 400 }
+        message: { type: string }
+        error: { type: string }
+
+    ScoringMode:
+      type: string
+      enum: [CUMULATIVE, SETS]
+      description: |
+        - `CUMULATIVE`: Gesamtstand = Summe der Punkte aller Abschnitte (z. B. Handball).
+        - `SETS`: Gesamtstand = Anzahl gewonnener Abschnitte (z. B. Volleyball).
+
+    MatchStatus:
+      type: string
+      enum: [SCHEDULED, LIVE, FINISHED]
+
+    Side:
+      type: string
+      enum: [HOME, AWAY]
+
+    League:
+      type: object
+      required: [id, name, season, scoringMode, teamIds, adminIds]
+      properties:
+        id: { type: string, example: league-1 }
+        name: { type: string, example: Handball-Regionalliga Süd }
+        season: { type: string, example: 2026/27 }
+        scoringMode: { $ref: '#/components/schemas/ScoringMode' }
+        teamIds: { type: array, items: { type: string } }
+        adminIds: { type: array, items: { type: string }, description: IDs der zuständigen Benutzer }
+
+    LeagueInput:
+      type: object
+      required: [name, season, scoringMode]
+      properties:
+        name: { type: string, example: Handball-Oberliga }
+        season: { type: string, example: 2026/27 }
+        scoringMode: { $ref: '#/components/schemas/ScoringMode' }
+
+    Tournament:
+      type: object
+      required: [id, name, startDate, endDate, scoringMode, teamIds, adminIds]
+      properties:
+        id: { type: string, example: tournament-1 }
+        name: { type: string, example: Volleyball-Stadtturnier }
+        startDate: { type: string, format: date, example: '2026-05-16' }
+        endDate: { type: string, format: date, example: '2026-05-18' }
+        scoringMode: { $ref: '#/components/schemas/ScoringMode' }
+        teamIds: { type: array, items: { type: string } }
+        adminIds: { type: array, items: { type: string }, description: IDs der zuständigen Benutzer }
+
+    TournamentInput:
+      type: object
+      required: [name, startDate, endDate, scoringMode]
+      description: '`endDate` darf nicht vor `startDate` liegen.'
+      properties:
+        name: { type: string, example: Beach-Cup }
+        startDate: { type: string, format: date, example: '2026-07-04' }
+        endDate: { type: string, format: date, example: '2026-07-05' }
+        scoringMode: { $ref: '#/components/schemas/ScoringMode' }
+
+    Team:
+      type: object
+      required: [id, name, shortName]
+      properties:
+        id: { type: string, example: team-1 }
+        name: { type: string, example: HSG Neckartal }
+        shortName: { type: string, example: NEC }
+
+    TeamInput:
+      type: object
+      required: [name, shortName]
+      properties:
+        name: { type: string, example: SC Hafenviertel }
+        shortName: { type: string, example: HAF }
+
+    Role:
+      type: string
+      enum: [SYSTEM_ADMIN, LEAGUE_ADMIN, SCORER]
+
+    User:
+      type: object
+      required: [id, username, name, roles]
+      properties:
+        id: { type: string, example: user-2 }
+        username: { type: string, example: handball-admin }
+        name: { type: string, example: Hanna Berger }
+        roles: { type: array, items: { $ref: '#/components/schemas/Role' } }
+
+    CurrentUser:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [permissions]
+          properties:
+            permissions:
+              type: object
+              description: Aus dem aktuellen Datenbestand abgeleitete Zuweisungen.
+              required: [competitionIds, matchIds]
+              properties:
+                competitionIds:
+                  type: array
+                  items: { type: string }
+                  description: Wettbewerbe, für die der Benutzer als Admin eingetragen ist
+                matchIds:
+                  type: array
+                  items: { type: string }
+                  description: Spiele, für die der Benutzer als Schreiber eingetragen ist
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string }
+
+    LoginResponse:
+      type: object
+      required: [accessToken, user]
+      properties:
+        accessToken:
+          type: string
+          description: 'JWT (HS256), 8 Stunden gültig. Payload: `sub`, `name`, `roles`, `scopes` (`competitionIds`, `matchIds` zum Zeitpunkt der Anmeldung).'
+        user: { $ref: '#/components/schemas/CurrentUser' }
+
+    MatchInput:
+      type: object
+      required: [competitionId, homeTeamId, awayTeamId, scheduledAt]
+      properties:
+        competitionId: { type: string, example: league-1 }
+        homeTeamId: { type: string, example: team-2 }
+        awayTeamId: { type: string, example: team-5 }
+        scheduledAt: { type: string, format: date-time, example: '2026-12-05T18:00:00Z' }
+        venue: { type: string, example: Bergheim-Arena }
+
+    MatchUpdateInput:
+      type: object
+      required: [homeTeamId, awayTeamId, scheduledAt]
+      properties:
+        homeTeamId: { type: string }
+        awayTeamId: { type: string }
+        scheduledAt: { type: string, format: date-time }
+        venue: { type: string }
+
+    PeriodScore:
+      type: object
+      required: [period, home, away, winner]
+      properties:
+        period: { type: integer, example: 3, description: 'Abschnitt (Halbzeit, Satz, Viertel …), beginnend bei 1' }
+        home: { type: integer, example: 12 }
+        away: { type: integer, example: 9 }
+        winner:
+          type: string
+          nullable: true
+          enum: [HOME, AWAY, DRAW, null]
+          description: Gewinner des Abschnitts; `null`, solange der Abschnitt läuft.
+
+    Score:
+      type: object
+      required: [home, away, periods]
+      description: |
+        Aus den Ereignissen berechneter Spielstand. Bei `CUMULATIVE` ist der Gesamtstand die Summe der Punkte aller
+        Abschnitte, bei `SETS` die Anzahl gewonnener Abschnitte.
+      properties:
+        home: { type: integer, example: 1 }
+        away: { type: integer, example: 1 }
+        periods: { type: array, items: { $ref: '#/components/schemas/PeriodScore' } }
+      example:
+        home: 1
+        away: 1
+        periods:
+          - { period: 1, home: 25, away: 21, winner: HOME }
+          - { period: 2, home: 23, away: 25, winner: AWAY }
+          - { period: 3, home: 12, away: 9, winner: null }
+
+    Match:
+      type: object
+      required: [id, competitionId, scoringMode, homeTeam, awayTeam, scheduledAt, scorerIds, status, currentPeriod, score, lastSeq]
+      properties:
+        id: { type: string, example: match-9 }
+        competitionId: { type: string, example: tournament-1 }
+        scoringMode: { $ref: '#/components/schemas/ScoringMode' }
+        homeTeam: { $ref: '#/components/schemas/Team' }
+        awayTeam: { $ref: '#/components/schemas/Team' }
+        scheduledAt: { type: string, format: date-time }
+        venue: { type: string, example: Halle 1 }
+        scorerIds: { type: array, items: { type: string }, description: IDs der zuständigen Schreiber }
+        status: { $ref: '#/components/schemas/MatchStatus' }
+        currentPeriod:
+          type: integer
+          nullable: true
+          description: Laufender Abschnitt; `null` vor dem ersten Abschnitt, zwischen Abschnitten und nach Spielende.
+        score: { $ref: '#/components/schemas/Score' }
+        lastSeq: { type: integer, description: '`seq` des letzten Ereignisses (0, wenn keine Ereignisse)' }
+
+    EventType:
+      type: string
+      enum: [MATCH_STARTED, PERIOD_STARTED, SCORE, PERIOD_ENDED, MATCH_ENDED, PENALTY, NOTE, CORRECTION]
+
+    EventInput:
+      type: object
+      required: [type]
+      description: |
+        | Typ | Zusätzliche Felder | Erlaubt, wenn … | Wirkung |
+        |---|---|---|---|
+        | `MATCH_STARTED` | – | Spiel `SCHEDULED` | Status `LIVE` |
+        | `PERIOD_STARTED` | – | Spiel `LIVE`, kein Abschnitt läuft | nächster Abschnitt beginnt |
+        | `SCORE` | `team`, optional `points` | Abschnitt läuft | Punkte für `team` im laufenden Abschnitt |
+        | `PERIOD_ENDED` | – | Abschnitt läuft | Abschnitt endet, Gewinner wird festgelegt |
+        | `MATCH_ENDED` | – | Spiel `LIVE`, kein Abschnitt läuft | Status `FINISHED` |
+        | `PENALTY` | `team`, optional `text` | Spiel `LIVE` | nur Information, kein Einfluss auf den Stand |
+        | `NOTE` | `text` | immer | nur Information |
+        | `CORRECTION` | `revertsEventId` | immer | neutralisiert ein `SCORE`/`PENALTY` |
+
+        Nach `MATCH_ENDED` sind nur noch `NOTE` und `CORRECTION` möglich. Verstöße ergeben `409`.
+
+        `points` (Standard 1) wird nur bei `CUMULATIVE` berücksichtigt; bei `SETS` zählt jeder `SCORE` einen Punkt.
+        Sportartspezifische Regeln (Satzlänge, Mindestvorsprung, Anzahl Abschnitte) prüft die API nicht.
+
+        Ein Ereignis kann nur einmal korrigiert werden; Korrekturen auf unbekannte, bereits korrigierte oder andere
+        Ereignistypen ergeben `409`.
+      properties:
+        type: { $ref: '#/components/schemas/EventType' }
+        team: { $ref: '#/components/schemas/Side' }
+        points: { type: integer, minimum: 1, default: 1 }
+        revertsEventId: { type: string, description: ID des zu neutralisierenden Ereignisses }
+        text: { type: string }
+        clientEventId:
+          type: string
+          description: Vom Client vergebene ID; ein erneutes Senden mit derselben ID legt kein zweites Ereignis an.
+
+    MatchEvent:
+      type: object
+      required: [id, matchId, seq, type, createdAt, createdBy]
+      properties:
+        id: { type: string, example: match-3-e47 }
+        matchId: { type: string, example: match-3 }
+        seq: { type: integer, example: 47, description: 'Pro Spiel fortlaufende Nummer, beginnend bei 1' }
+        type: { $ref: '#/components/schemas/EventType' }
+        team: { $ref: '#/components/schemas/Side' }
+        points: { type: integer }
+        revertsEventId: { type: string }
+        text: { type: string }
+        clientEventId: { type: string }
+        createdAt: { type: string, format: date-time }
+        createdBy:
+          type: string
+          description: Benutzername; `anonymous` bei Erfassung über v1, `simulator` beim Live-Simulator.
+
+    MatchUpdate:
+      type: object
+      required: [event, score, status, currentPeriod]
+      description: Ein Ereignis mit dem Spielzustand unmittelbar nach diesem Ereignis.
+      properties:
+        event: { $ref: '#/components/schemas/MatchEvent' }
+        score: { $ref: '#/components/schemas/Score' }
+        status: { $ref: '#/components/schemas/MatchStatus' }
+        currentPeriod: { type: integer, nullable: true }
+
+    MatchUpdates:
+      type: object
+      required: [updates, lastSeq, status]
+      description: Antwort des Long-Poll-Endpunkts.
+      properties:
+        updates:
+          type: array
+          description: Neue Ereignisse mit `seq` größer `afterSeq` in `seq`-Reihenfolge; leer nach Ablauf der Wartezeit.
+          items: { $ref: '#/components/schemas/MatchUpdate' }
+        lastSeq:
+          type: integer
+          minimum: 0
+          description: Größte `seq` in `updates`, sonst das übergebene `afterSeq`. Wert für `afterSeq` der nächsten Abfrage.
+        status: { $ref: '#/components/schemas/MatchStatus' }
